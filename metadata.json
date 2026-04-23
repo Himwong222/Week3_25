@@ -1,0 +1,5 @@
+{
+  "name": "校園美食評分",
+  "description": "一個校園美食評分系統，支持匿名提交、分類篩選和實時點贊。",
+  "requestFramePermissions": []
+}
