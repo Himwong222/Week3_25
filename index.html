@@ -128,6 +128,19 @@
 
     <script>
         // 常數與配置
+        const APPS_SCRIPT_URL = "PASTE_YOUR_APPS_SCRIPT_URL_HERE";
+
+        async function syncToSheet(payload) {
+            if (APPS_SCRIPT_URL.includes("PASTE")) return;
+            try {
+                await fetch(APPS_SCRIPT_URL, {
+                    method: "POST",
+                    headers: { "Content-Type": "text/plain" },
+                    body: JSON.stringify(payload)
+                });
+            } catch (e) { console.warn(e); }
+        }
+
         const CATEGORIES = ["全部", "小食", "熱食", "飲品", "主食"];
         const LS_KEY = "records";
 
@@ -153,6 +166,7 @@
             const records = loadData();
             records.unshift(newRecord); // 新的在前面
             localStorage.setItem(LS_KEY, JSON.stringify(records));
+            syncToSheet({ action: "create", record: newRecord });
         }
 
         /**
@@ -265,6 +279,7 @@
                 record.votes = (record.votes || 0) + 1;
                 localStorage.setItem(LS_KEY, JSON.stringify(records));
                 renderList();
+                syncToSheet({ action: "update", id: record.id, changes: { votes: record.votes } });
             }
         };
 
@@ -275,6 +290,7 @@
                 record.status = 'done';
                 localStorage.setItem(LS_KEY, JSON.stringify(records));
                 renderList();
+                syncToSheet({ action: "update", id: record.id, changes: { status: record.status } });
             }
         };
 
