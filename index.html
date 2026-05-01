@@ -127,20 +127,11 @@
     </div>
 
     <script>
-        // 常數與配置
-        const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx79kK5bzpbvDQB3wKxM2ZqyESmp41MZMld0rv8_s2xbqtTzuRuIRJate_BzzDc_pCtoA/exec";
+        // ===================== 設定 Google Apps Script URL =====================
+        // 請貼上你部署後取得的網址（不要刪除前後引號）
+        const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx480l_8yNg6nZoqrcMqeTdssOj1K9RsYr6avTtEQ3NfYw4VedsK7g7fI_MLx-jiMNBkw/exec";
 
-        async function syncToSheet(payload) {
-            if (APPS_SCRIPT_URL.includes("PASTE")) return;
-            try {
-                await fetch(APPS_SCRIPT_URL, {
-                    method: "POST",
-                    headers: { "Content-Type": "text/plain" },
-                    body: JSON.stringify(payload)
-                });
-            } catch (e) { console.warn(e); }
-        }
-
+        // 常數配置
         const CATEGORIES = ["全部", "小食", "熱食", "飲品", "主食"];
         const LS_KEY = "records";
 
@@ -149,35 +140,65 @@
         let currentStatusFilter = "all";
         let selectedNewCategory = "小食";
 
-        // --- 核心 Function (規則 6) ---
+        // ===================== Google Sheet 同步函數 =====================
+        // 從 Sheet 讀取所有資料，並更新 localStorage 與畫面
+        async function syncFromSheet() {
+            if (APPS_SCRIPT_URL.includes("PASTE")) return;
+            try {
+                const res = await fetch(APPS_SCRIPT_URL);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const records = await res.json();
+                if (Array.isArray(records)) {
+                    localStorage.setItem(LS_KEY, JSON.stringify(records));
+                    renderList();
+                } else {
+                    console.warn("Sheet 回傳非陣列資料");
+                }
+            } catch (e) {
+                console.warn("從 Sheet 同步失敗，使用本地備份", e);
+            }
+        }
 
-        /**
-         * 讀取資料 (規則 6.2)
-         */
+        // 傳送變更到 Sheet (create / update / delete)
+        async function syncToSheet(payload) {
+            if (APPS_SCRIPT_URL.includes("PASTE")) return;
+            try {
+                const res = await fetch(APPS_SCRIPT_URL, {
+                    method: "POST",
+                    headers: { "Content-Type": "text/plain" },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    // 成功後從 Sheet 拉取最新資料，覆蓋本地並重繪
+                    await syncFromSheet();
+                } else {
+                    console.warn("同步失敗，HTTP 狀態碼:", res.status);
+                }
+            } catch (e) {
+                console.warn("同步錯誤，保留本地資料", e);
+            }
+        }
+
+        // ===================== 原本的 localStorage 核心函數 =====================
         function loadData() {
             const raw = localStorage.getItem(LS_KEY);
             return raw ? JSON.parse(raw) : [];
         }
 
-        /**
-         * 儲存資料 (規則 6.1)
-         */
         function saveData(newRecord) {
             const records = loadData();
-            records.unshift(newRecord); // 新的在前面
+            records.unshift(newRecord);
             localStorage.setItem(LS_KEY, JSON.stringify(records));
+            renderList();
+            // 同步到 Google Sheet
             syncToSheet({ action: "create", record: newRecord });
         }
 
-        /**
-         * 渲染列表 (規則 6.3)
-         */
         function renderList() {
             const records = loadData();
             const listEl = document.getElementById('foodList');
             const emptyEl = document.getElementById('emptyState');
             
-            // 過濾邏輯
             let filtered = records;
             if (currentFilter !== "全部") {
                 filtered = filtered.filter(r => r.category === currentFilter);
@@ -186,7 +207,6 @@
                 filtered = filtered.filter(r => r.status === currentStatusFilter);
             }
 
-            // 排序: active 在前，然後按時間降序
             filtered.sort((a, b) => {
                 if (a.status === b.status) {
                     return new Date(b.createdAt) - new Date(a.createdAt);
@@ -194,14 +214,12 @@
                 return a.status === 'active' ? -1 : 1;
             });
 
-            // 統計數字
             const active = records.filter(r => r.status === 'active').length;
             const done = records.filter(r => r.status === 'done').length;
             document.getElementById('activeCount').textContent = active;
             document.getElementById('doneCount').textContent = done;
             document.getElementById('totalCount').textContent = records.length;
 
-            // 清空並重新渲染
             listEl.innerHTML = '';
             if (filtered.length === 0) {
                 emptyEl.classList.remove('hidden');
@@ -212,13 +230,34 @@
                     listEl.appendChild(card);
                 });
             }
-
-            // 重新初始化圖標
             lucide.createIcons();
         }
 
-        // --- 輔助邏輯 ---
+        // 投票與狀態切換（保留原邏輯，但修改後仍會觸發全域 syncToSheet）
+        window.vote = (id) => {
+            const records = loadData();
+            const record = records.find(r => r.id === id);
+            if (record) {
+                record.votes = (record.votes || 0) + 1;
+                localStorage.setItem(LS_KEY, JSON.stringify(records));
+                renderList();
+                // 同步到 Sheet
+                syncToSheet({ action: "update", id: record.id, changes: { votes: record.votes } });
+            }
+        };
 
+        window.toggleStatus = (id) => {
+            const records = loadData();
+            const record = records.find(r => r.id === id);
+            if (record && record.status === 'active') {
+                record.status = 'done';
+                localStorage.setItem(LS_KEY, JSON.stringify(records));
+                renderList();
+                syncToSheet({ action: "update", id: record.id, changes: { status: record.status } });
+            }
+        };
+
+        // ===================== 輔助函數 (Card 建立、圖示等) =====================
         function createCard(record) {
             const div = document.createElement('div');
             const isDone = record.status === 'done';
@@ -270,32 +309,7 @@
             return icons[cat] || '<i data-lucide="filter" class="w-4 h-4"></i>';
         }
 
-        // --- 互動邏輯 ---
-
-        window.vote = (id) => {
-            const records = loadData();
-            const record = records.find(r => r.id === id);
-            if (record) {
-                record.votes = (record.votes || 0) + 1;
-                localStorage.setItem(LS_KEY, JSON.stringify(records));
-                renderList();
-                syncToSheet({ action: "update", id: record.id, changes: { votes: record.votes } });
-            }
-        };
-
-        window.toggleStatus = (id) => {
-            const records = loadData();
-            const record = records.find(r => r.id === id);
-            if (record && record.status === 'active') {
-                record.status = 'done';
-                localStorage.setItem(LS_KEY, JSON.stringify(records));
-                renderList();
-                syncToSheet({ action: "update", id: record.id, changes: { status: record.status } });
-            }
-        };
-
-        // --- 初始化 UI 元件 ---
-
+        // ===================== UI 元件初始化 =====================
         function initFilters() {
             const catContainer = document.getElementById('categoryFilters');
             catContainer.innerHTML = '';
@@ -332,8 +346,7 @@
             lucide.createIcons();
         }
 
-        // --- 事件綁定 ---
-
+        // ===================== 事件綁定與啟動 =====================
         document.getElementById('themeToggle').onclick = () => {
             const isDark = document.documentElement.classList.toggle('dark');
             document.getElementById('moonIcon').classList.toggle('hidden', isDark);
@@ -349,11 +362,10 @@
         document.getElementById('foodForm').onsubmit = (e) => {
             e.preventDefault();
             const name = document.getElementById('foodName').value.trim();
-            if(!name) return;
+            if (!name) return;
 
-            // 構造記錄 (規則 4)
             const newRecord = {
-                id: Date.now() + "_" + Math.random().toString(36).slice(2,6),
+                id: Date.now() + "_" + Math.random().toString(36).slice(2, 6),
                 createdAt: new Date().toISOString(),
                 name: name,
                 category: selectedNewCategory,
@@ -362,15 +374,11 @@
             };
 
             saveData(newRecord);
-            renderList();
-            
             document.getElementById('foodName').value = '';
             modal.classList.add('hidden');
         };
 
-        // --- 啟動 ---
-
-        document.addEventListener('DOMContentLoaded', () => {
+        document.addEventListener('DOMContentLoaded', async () => {
             // 主題恢復
             if (localStorage.getItem('theme') === 'dark' || (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
                 document.documentElement.classList.add('dark');
@@ -379,7 +387,14 @@
             }
 
             initFilters();
-            renderList();
+            
+            // 先從 localStorage 顯示（如果有的話）
+            if (localStorage.getItem(LS_KEY)) {
+                renderList();
+            }
+            
+            // 再從 Google Sheet 拉取最新資料覆蓋（同步）
+            await syncFromSheet();
         });
     </script>
 </body>
