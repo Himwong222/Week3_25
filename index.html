@@ -52,17 +52,9 @@
 
         <!-- 篩選欄 -->
         <div class="max-w-4xl mx-auto px-4 py-3 flex flex-col gap-3">
-            <!-- 類別篩選 -->
-            <div id="categoryFilters" class="overflow-x-auto no-scrollbar flex items-center gap-2">
-                <!-- 由 JS 渲染 -->
-            </div>
-
-            <!-- 狀態篩選 & 統計 -->
+            <div id="categoryFilters" class="overflow-x-auto no-scrollbar flex items-center gap-2"></div>
             <div class="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 dark:border-neutral-800 pt-3">
-                <div id="statusFilters" class="flex items-center gap-2">
-                    <!-- 由 JS 渲染 -->
-                </div>
-
+                <div id="statusFilters" class="flex items-center gap-2"></div>
                 <div class="flex items-center gap-4 text-[10px] font-bold uppercase tracking-widest text-neutral-400 dark:text-neutral-500">
                     <div class="flex items-center gap-1.5">
                         <span class="w-1.5 h-1.5 rounded-full bg-orange-500"></span>
@@ -82,10 +74,7 @@
 
     <!-- 主內容區 -->
     <main class="max-w-4xl mx-auto px-4 py-8">
-        <div id="foodList" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <!-- 由 JS 渲染 -->
-        </div>
-
+        <div id="foodList" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
         <div id="emptyState" class="hidden text-center py-20">
             <div class="w-20 h-20 bg-neutral-100 dark:bg-neutral-800 rounded-full flex items-center justify-center mx-auto mb-4">
                 <i data-lucide="utensils" class="w-10 h-10 text-neutral-300 dark:text-neutral-600"></i>
@@ -104,20 +93,15 @@
                     <i data-lucide="x" class="w-5 h-5"></i>
                 </button>
             </div>
-
             <form id="foodForm" class="p-6 space-y-6">
                 <div>
                     <label class="block text-sm font-bold mb-2 text-neutral-500 uppercase tracking-wider">美食名稱</label>
                     <input type="text" id="foodName" required placeholder="例如：小食部魚蛋" class="w-full px-4 py-3 rounded-xl bg-neutral-100 dark:bg-neutral-800 border-transparent focus:ring-2 focus:ring-orange-500/50 outline-none transition-all">
                 </div>
-
                 <div>
                     <label class="block text-sm font-bold mb-2 text-neutral-500 uppercase tracking-wider">分類</label>
-                    <div id="modalCategoryGrid" class="grid grid-cols-2 gap-2">
-                        <!-- 由 JS 渲染 -->
-                    </div>
+                    <div id="modalCategoryGrid" class="grid grid-cols-2 gap-2"></div>
                 </div>
-
                 <button type="submit" class="w-full bg-orange-500 hover:bg-orange-600 text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 shadow-lg shadow-orange-500/20">
                     <i data-lucide="send" class="w-5 h-5"></i>
                     立即提交
@@ -129,7 +113,7 @@
     <script>
         // ===================== 設定 Google Apps Script URL =====================
         // 請貼上你部署後取得的網址（不要刪除前後引號）
-        const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx480l_8yNg6nZoqrcMqeTdssOj1K9RsYr6avTtEQ3NfYw4VedsK7g7fI_MLx-jiMNBkw/exec";
+        const APPS_SCRIPT_URL = "PASTE_YOUR_APPS_SCRIPT_URL_HERE";
 
         // 常數配置
         const CATEGORIES = ["全部", "小食", "熱食", "飲品", "主食"];
@@ -149,8 +133,11 @@
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const records = await res.json();
                 if (Array.isArray(records)) {
-                    localStorage.setItem(LS_KEY, JSON.stringify(records));
-                    renderList();
+                    // 保護：若 Sheet 為空且本地已有資料，不覆蓋（避免首次連線時清空）
+                    if (records.length > 0 || !localStorage.getItem(LS_KEY)) {
+                        localStorage.setItem(LS_KEY, JSON.stringify(records));
+                        renderList();
+                    }
                 } else {
                     console.warn("Sheet 回傳非陣列資料");
                 }
@@ -179,7 +166,7 @@
             }
         }
 
-        // ===================== 原本的 localStorage 核心函數 =====================
+        // ===================== localStorage 核心函數 =====================
         function loadData() {
             const raw = localStorage.getItem(LS_KEY);
             return raw ? JSON.parse(raw) : [];
@@ -233,7 +220,7 @@
             lucide.createIcons();
         }
 
-        // 投票與狀態切換（保留原邏輯，但修改後仍會觸發全域 syncToSheet）
+        // 投票與狀態切換
         window.vote = (id) => {
             const records = loadData();
             const record = records.find(r => r.id === id);
@@ -241,7 +228,6 @@
                 record.votes = (record.votes || 0) + 1;
                 localStorage.setItem(LS_KEY, JSON.stringify(records));
                 renderList();
-                // 同步到 Sheet
                 syncToSheet({ action: "update", id: record.id, changes: { votes: record.votes } });
             }
         };
@@ -257,7 +243,7 @@
             }
         };
 
-        // ===================== 輔助函數 (Card 建立、圖示等) =====================
+        // ===================== 卡片與圖示 =====================
         function createCard(record) {
             const div = document.createElement('div');
             const isDone = record.status === 'done';
@@ -309,7 +295,7 @@
             return icons[cat] || '<i data-lucide="filter" class="w-4 h-4"></i>';
         }
 
-        // ===================== UI 元件初始化 =====================
+        // ===================== UI 初始化 =====================
         function initFilters() {
             const catContainer = document.getElementById('categoryFilters');
             catContainer.innerHTML = '';
@@ -393,7 +379,7 @@
                 renderList();
             }
             
-            // 再從 Google Sheet 拉取最新資料覆蓋（同步）
+            // 再從 Google Sheet 拉取最新資料（若有的話）
             await syncFromSheet();
         });
     </script>
