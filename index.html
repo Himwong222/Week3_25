@@ -43,6 +43,11 @@
                     <i data-lucide="moon" id="moonIcon" class="w-5 h-5"></i>
                     <i data-lucide="sun" id="sunIcon" class="w-5 h-5 hidden"></i>
                 </button>
+                <!-- AI 摘要按鈕 -->
+                <button onclick="handleAISummary()" id="aiBtn" class="flex items-center gap-2 bg-zinc-800 text-zinc-100 px-4 py-2 rounded-full font-medium hover:bg-zinc-700 transition-colors active:scale-95 border border-zinc-700 disabled:opacity-50">
+                    <i data-lucide="sparkles" class="w-4 h-4"></i>
+                    <span id="aiBtnText">AI 摘要</span>
+                </button>
                 <button id="addBtn" class="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-full font-medium flex items-center gap-2 transition-all active:scale-95 shadow-lg shadow-orange-500/20">
                     <i data-lucide="plus" class="w-5 h-5"></i>
                     <span class="hidden sm:inline">推薦美食</span>
@@ -125,28 +130,33 @@
         let selectedNewCategory = "小食";
 
         // ===================== Google Sheet 同步函數 =====================
-        // 從 Sheet 讀取所有資料，並更新 localStorage 與畫面
-        async function syncFromSheet() {
-            if (APPS_SCRIPT_URL.includes("PASTE")) return;
+        // 將 Sheet 回傳的欄位統一為前端內部格式
+        function normalizeRecord(record) {
+            return {
+                id: record.id || record.ID || "",
+                createdAt: record.createdAt || record.CreatedAt || "",
+                content: record.content || record.Content || "",
+                category: record.category || record.Category || "其他",
+                likes: Number(record.likes !== undefined ? record.likes : (record.Likes || 0)),
+                status: record.status || record.Status || "active"
+            };
+        }
+
+        // 從 Sheet 讀取所有資料（GET）
+        async function fetchRecordsFromSheet() {
+            if (APPS_SCRIPT_URL.includes("PASTE")) return null;
             try {
                 const res = await fetch(APPS_SCRIPT_URL);
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                const records = await res.json();
-                if (Array.isArray(records)) {
-                    // 保護：若 Sheet 為空且本地已有資料，不覆蓋（避免首次連線時清空）
-                    if (records.length > 0 || !localStorage.getItem(LS_KEY)) {
-                        localStorage.setItem(LS_KEY, JSON.stringify(records));
-                        renderList();
-                    }
-                } else {
-                    console.warn("Sheet 回傳非陣列資料");
-                }
+                const data = await res.json();
+                // doGet() 回傳 { records: [...] }
+                return Array.isArray(data.records) ? data.records.map(normalizeRecord) : null;
             } catch (e) {
-                console.warn("從 Sheet 同步失敗，使用本地備份", e);
+                console.warn("從 Sheet 讀取失敗", e);
+                return null;
             }
         }
 
-        // 傳送變更到 Sheet (create / update / delete)
+        // 傳送變更到 Sheet（create / update / delete）
         async function syncToSheet(payload) {
             if (APPS_SCRIPT_URL.includes("PASTE")) return;
             try {
@@ -155,10 +165,7 @@
                     headers: { "Content-Type": "text/plain" },
                     body: JSON.stringify(payload)
                 });
-                if (res.ok) {
-                    // 成功後從 Sheet 拉取最新資料，覆蓋本地並重繪
-                    await syncFromSheet();
-                } else {
+                if (!res.ok) {
                     console.warn("同步失敗，HTTP 狀態碼:", res.status);
                 }
             } catch (e) {
@@ -167,22 +174,38 @@
         }
 
         // ===================== localStorage 核心函數 =====================
-        function loadData() {
-            const raw = localStorage.getItem(LS_KEY);
-            return raw ? JSON.parse(raw) : [];
+        async function loadData() {
+            const remote = await fetchRecordsFromSheet();
+            if (remote) {
+                localStorage.setItem(LS_KEY, JSON.stringify(remote));
+                return remote;
+            }
+            const data = localStorage.getItem(LS_KEY);
+            return data ? JSON.parse(data) : [];
         }
 
-        function saveData(newRecord) {
-            const records = loadData();
+        async function saveData(newRecord) {
+            const records = await loadData();
             records.unshift(newRecord);
             localStorage.setItem(LS_KEY, JSON.stringify(records));
-            renderList();
-            // 同步到 Google Sheet
-            syncToSheet({ action: "create", record: newRecord });
+            // 發送給後端時，使用 Sheet 專用大寫欄位
+            syncToSheet({ 
+                action: "create", 
+                record: { 
+                    ID: newRecord.id, 
+                    CreatedAt: newRecord.createdAt, 
+                    Content: newRecord.content, 
+                    Category: newRecord.category, 
+                    Likes: newRecord.likes, 
+                    Status: newRecord.status 
+                } 
+            });
+            // 以最新 records 直接渲染，避免被遠端舊資料覆蓋
+            await renderList(records);
         }
 
-        function renderList() {
-            const records = loadData();
+        async function renderList(recordsOverride) {
+            const records = recordsOverride || await loadData();
             const listEl = document.getElementById('foodList');
             const emptyEl = document.getElementById('emptyState');
             
@@ -220,26 +243,26 @@
             lucide.createIcons();
         }
 
-        // 投票與狀態切換
-        window.vote = (id) => {
-            const records = loadData();
+        // 投票與狀態切換（使用內部 likes 欄位，同步時轉為大寫鍵）
+        window.vote = async (id) => {
+            const records = await loadData();
             const record = records.find(r => r.id === id);
             if (record) {
-                record.votes = (record.votes || 0) + 1;
+                record.likes = (record.likes || 0) + 1;
                 localStorage.setItem(LS_KEY, JSON.stringify(records));
-                renderList();
-                syncToSheet({ action: "update", id: record.id, changes: { votes: record.votes } });
+                syncToSheet({ action: "update", id: record.id, changes: { Likes: record.likes } });
+                await renderList(records);
             }
         };
 
-        window.toggleStatus = (id) => {
-            const records = loadData();
+        window.toggleStatus = async (id) => {
+            const records = await loadData();
             const record = records.find(r => r.id === id);
             if (record && record.status === 'active') {
                 record.status = 'done';
                 localStorage.setItem(LS_KEY, JSON.stringify(records));
-                renderList();
-                syncToSheet({ action: "update", id: record.id, changes: { status: record.status } });
+                syncToSheet({ action: "update", id: record.id, changes: { Status: record.status } });
+                await renderList(records);
             }
         };
 
@@ -260,11 +283,11 @@
                     </span>
                     <span class="text-[10px] text-neutral-400 font-mono">${dateStr}</span>
                 </div>
-                <h3 class="text-lg font-semibold mb-6 line-clamp-2 leading-tight ${isDone ? 'text-neutral-500' : ''}">${record.name}</h3>
+                <h3 class="text-lg font-semibold mb-6 line-clamp-2 leading-tight ${isDone ? 'text-neutral-500' : ''}">${record.content}</h3>
                 <div class="flex flex-col gap-3">
                     <div class="flex items-center justify-between">
                         <div class="flex items-center gap-1.5">
-                            <div class="w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${isDone ? 'bg-neutral-200 dark:bg-neutral-700 text-neutral-400' : 'bg-neutral-100 dark:bg-neutral-800 text-orange-500'}">${record.votes || 0}</div>
+                            <div class="w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${isDone ? 'bg-neutral-200 dark:bg-neutral-700 text-neutral-400' : 'bg-neutral-100 dark:bg-neutral-800 text-orange-500'}">${record.likes || 0}</div>
                             <span class="text-xs text-neutral-500 font-medium">認同</span>
                         </div>
                         <button onclick="vote('${record.id}')" ${isDone ? 'disabled' : ''} class="flex items-center gap-2 px-4 py-2 rounded-xl transition-all active:scale-90 ${isDone ? 'bg-transparent text-neutral-400 cursor-not-allowed' : 'bg-neutral-100 dark:bg-neutral-800 hover:bg-orange-50 dark:hover:bg-orange-900/20 text-neutral-600 dark:text-neutral-400 hover:text-orange-600 dark:hover:text-orange-400'}">
@@ -332,6 +355,42 @@
             lucide.createIcons();
         }
 
+        // ===================== AI 摘要功能 =====================
+        async function askAI(userPrompt) {
+            const res = await fetch(APPS_SCRIPT_URL, {
+                method: "POST",
+                headers: { "Content-Type": "text/plain" },
+                body: JSON.stringify({ action: "askAI", prompt: userPrompt })
+            });
+            const data = await res.json();
+            return data.result || data.error || "AI 冇回應";
+        }
+
+        async function handleAISummary() {
+            const btn = document.getElementById('aiBtn');
+            const text = document.getElementById('aiBtnText');
+            btn.disabled = true;
+            text.textContent = '思考中...';
+            try {
+                const records = await loadData();
+                if (records.length === 0) { 
+                    alert('未有吐槽資料可以摘要'); 
+                    return; 
+                }
+                const summaryInput = records.slice(0, 30).map(r =>
+                    `[${r.category}] ${r.content}`
+                ).join('\n');
+                const prompt = '以下是班級吐槽牆嘅留言。請用繁體中文，用 3-5 句概括同學最關心嘅問題、情緒同有冇明顯 patterns:\n\n' + summaryInput;
+                const result = await askAI(prompt);
+                alert(result);
+            } catch (e) {
+                alert('AI 出錯：' + e.message);
+            } finally {
+                btn.disabled = false;
+                text.textContent = 'AI 摘要';
+            }
+        }
+
         // ===================== 事件綁定與啟動 =====================
         document.getElementById('themeToggle').onclick = () => {
             const isDark = document.documentElement.classList.toggle('dark');
@@ -353,9 +412,9 @@
             const newRecord = {
                 id: Date.now() + "_" + Math.random().toString(36).slice(2, 6),
                 createdAt: new Date().toISOString(),
-                name: name,
+                content: name,
                 category: selectedNewCategory,
-                votes: 0,
+                likes: 0,
                 status: "active"
             };
 
@@ -364,7 +423,7 @@
             modal.classList.add('hidden');
         };
 
-        document.addEventListener('DOMContentLoaded', async () => {
+        window.onload = async () => {
             // 主題恢復
             if (localStorage.getItem('theme') === 'dark' || (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
                 document.documentElement.classList.add('dark');
@@ -373,15 +432,9 @@
             }
 
             initFilters();
-            
-            // 先從 localStorage 顯示（如果有的話）
-            if (localStorage.getItem(LS_KEY)) {
-                renderList();
-            }
-            
-            // 再從 Google Sheet 拉取最新資料（若有的話）
-            await syncFromSheet();
-        });
+            await renderList();
+            lucide.createIcons();
+        };
     </script>
 </body>
-</html>
+</html>F
