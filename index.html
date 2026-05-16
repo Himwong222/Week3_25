@@ -130,7 +130,7 @@
         let selectedNewCategory = "小食";
 
         // ===================== Google Sheet 同步函數 =====================
-        // 將 Sheet 回傳的欄位統一為前端內部格式
+        // 將 Sheet 回傳的大寫欄位轉為前端內部小寫
         function normalizeRecord(record) {
             return {
                 id: record.id || record.ID || "",
@@ -142,13 +142,12 @@
             };
         }
 
-        // 從 Sheet 讀取所有資料（GET）
+        // 從 Sheet 讀取所有資料（GET） → doGet 回傳 { records: [...] }
         async function fetchRecordsFromSheet() {
             if (APPS_SCRIPT_URL.includes("PASTE")) return null;
             try {
                 const res = await fetch(APPS_SCRIPT_URL);
                 const data = await res.json();
-                // doGet() 必須回傳 { records: [...] }
                 return Array.isArray(data.records) ? data.records.map(normalizeRecord) : null;
             } catch (e) {
                 console.warn("從 Sheet 讀取失敗", e);
@@ -156,11 +155,11 @@
             }
         }
 
-        // 傳送變更到 Sheet（create / update / delete），欄位自動轉為大寫鍵
+        // 傳送變更到 Sheet（create / update / delete），鍵名自動轉為大寫以匹配後端 HEADERS
         async function syncToSheet(payload) {
             if (APPS_SCRIPT_URL.includes("PASTE")) return;
             try {
-                // 若為 create，先將 record 轉成大寫鍵
+                // 若為 create，將內部 record 轉成大寫鍵
                 if (payload.action === "create" && payload.record) {
                     payload.record = {
                         ID: payload.record.id,
@@ -171,7 +170,7 @@
                         Status: payload.record.status
                     };
                 }
-                // 若為 update，changes 物件鍵名已從外部傳入大寫 (Likes, Status)
+                // update 的 changes 已在外部使用大寫鍵 (Likes, Status)
                 const res = await fetch(APPS_SCRIPT_URL, {
                     method: "POST",
                     headers: { "Content-Type": "text/plain" },
@@ -193,7 +192,7 @@
                 localStorage.setItem(LS_KEY, JSON.stringify(remote));
                 return remote;
             }
-            // 若無法取得，讀取 localStorage 並強制標準化（避免舊格式 undefined）
+            // 備援：讀取 localStorage 並強制標準化（避免舊格式 undefined）
             const data = localStorage.getItem(LS_KEY);
             if (data) {
                 try {
@@ -212,9 +211,9 @@
             const records = await loadData();
             records.unshift(newRecord);
             localStorage.setItem(LS_KEY, JSON.stringify(records));
-            // 同步到 Sheet (create 會自動轉換欄位)
+            // 同步到 Sheet（會自動轉大寫）
             await syncToSheet({ action: "create", record: newRecord });
-            // 直接使用最新的 records 渲染，避免被遠端舊資料覆蓋
+            // 使用最新 records 直接渲染，避免被遠端舊資料覆蓋
             await renderList(records);
         }
 
@@ -257,14 +256,13 @@
             lucide.createIcons();
         }
 
-        // 投票與狀態切換（使用內部 likes 欄位，同步時轉為大寫鍵）
+        // 投票與狀態切換（內部使用 likes，同步時送大寫 Likes）
         window.vote = async (id) => {
             const records = await loadData();
             const record = records.find(r => r.id === id);
             if (record) {
                 record.likes = (record.likes || 0) + 1;
                 localStorage.setItem(LS_KEY, JSON.stringify(records));
-                // 更新 Sheet 時傳送大寫 Likes
                 await syncToSheet({ action: "update", id: record.id, changes: { Likes: record.likes } });
                 await renderList(records);
             }
