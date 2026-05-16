@@ -148,7 +148,7 @@
             try {
                 const res = await fetch(APPS_SCRIPT_URL);
                 const data = await res.json();
-                // doGet() 回傳 { records: [...] }
+                // doGet() 必須回傳 { records: [...] }
                 return Array.isArray(data.records) ? data.records.map(normalizeRecord) : null;
             } catch (e) {
                 console.warn("從 Sheet 讀取失敗", e);
@@ -156,10 +156,22 @@
             }
         }
 
-        // 傳送變更到 Sheet（create / update / delete）
+        // 傳送變更到 Sheet（create / update / delete），欄位自動轉為大寫鍵
         async function syncToSheet(payload) {
             if (APPS_SCRIPT_URL.includes("PASTE")) return;
             try {
+                // 若為 create，先將 record 轉成大寫鍵
+                if (payload.action === "create" && payload.record) {
+                    payload.record = {
+                        ID: payload.record.id,
+                        CreatedAt: payload.record.createdAt,
+                        Content: payload.record.content,
+                        Category: payload.record.category,
+                        Likes: payload.record.likes,
+                        Status: payload.record.status
+                    };
+                }
+                // 若為 update，changes 物件鍵名已從外部傳入大寫 (Likes, Status)
                 const res = await fetch(APPS_SCRIPT_URL, {
                     method: "POST",
                     headers: { "Content-Type": "text/plain" },
@@ -175,32 +187,34 @@
 
         // ===================== localStorage 核心函數 =====================
         async function loadData() {
+            // 優先從 Sheet 取得最新資料
             const remote = await fetchRecordsFromSheet();
             if (remote) {
                 localStorage.setItem(LS_KEY, JSON.stringify(remote));
                 return remote;
             }
+            // 若無法取得，讀取 localStorage 並強制標準化（避免舊格式 undefined）
             const data = localStorage.getItem(LS_KEY);
-            return data ? JSON.parse(data) : [];
+            if (data) {
+                try {
+                    const parsed = JSON.parse(data);
+                    const normalized = parsed.map(normalizeRecord);
+                    localStorage.setItem(LS_KEY, JSON.stringify(normalized));
+                    return normalized;
+                } catch (e) {
+                    console.warn("localStorage 資料損毀，將使用空陣列");
+                }
+            }
+            return [];
         }
 
         async function saveData(newRecord) {
             const records = await loadData();
             records.unshift(newRecord);
             localStorage.setItem(LS_KEY, JSON.stringify(records));
-            // 發送給後端時，使用 Sheet 專用大寫欄位
-            syncToSheet({ 
-                action: "create", 
-                record: { 
-                    ID: newRecord.id, 
-                    CreatedAt: newRecord.createdAt, 
-                    Content: newRecord.content, 
-                    Category: newRecord.category, 
-                    Likes: newRecord.likes, 
-                    Status: newRecord.status 
-                } 
-            });
-            // 以最新 records 直接渲染，避免被遠端舊資料覆蓋
+            // 同步到 Sheet (create 會自動轉換欄位)
+            await syncToSheet({ action: "create", record: newRecord });
+            // 直接使用最新的 records 渲染，避免被遠端舊資料覆蓋
             await renderList(records);
         }
 
@@ -250,7 +264,8 @@
             if (record) {
                 record.likes = (record.likes || 0) + 1;
                 localStorage.setItem(LS_KEY, JSON.stringify(records));
-                syncToSheet({ action: "update", id: record.id, changes: { Likes: record.likes } });
+                // 更新 Sheet 時傳送大寫 Likes
+                await syncToSheet({ action: "update", id: record.id, changes: { Likes: record.likes } });
                 await renderList(records);
             }
         };
@@ -261,7 +276,7 @@
             if (record && record.status === 'active') {
                 record.status = 'done';
                 localStorage.setItem(LS_KEY, JSON.stringify(records));
-                syncToSheet({ action: "update", id: record.id, changes: { Status: record.status } });
+                await syncToSheet({ action: "update", id: record.id, changes: { Status: record.status } });
                 await renderList(records);
             }
         };
@@ -319,14 +334,14 @@
         }
 
         // ===================== UI 初始化 =====================
-        function initFilters() {
+        async function initFilters() {
             const catContainer = document.getElementById('categoryFilters');
             catContainer.innerHTML = '';
             CATEGORIES.forEach(cat => {
                 const btn = document.createElement('button');
                 btn.className = `px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${currentFilter === cat ? 'bg-orange-500 text-white shadow-md shadow-orange-500/20' : 'bg-white dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 border border-neutral-200 dark:border-neutral-700 hover:border-orange-500'}`;
                 btn.textContent = cat;
-                btn.onclick = () => { currentFilter = cat; initFilters(); renderList(); };
+                btn.onclick = async () => { currentFilter = cat; await initFilters(); await renderList(); };
                 catContainer.appendChild(btn);
             });
 
@@ -336,7 +351,7 @@
                 const btn = document.createElement('button');
                 btn.className = `px-3 py-1 rounded-lg text-xs font-bold transition-all border ${currentStatusFilter === s.id ? 'bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 border-neutral-900 dark:border-white' : 'bg-transparent text-neutral-500 border-neutral-200 dark:border-neutral-700 hover:border-neutral-400'}`;
                 btn.textContent = s.label;
-                btn.onclick = () => { currentStatusFilter = s.id; initFilters(); renderList(); };
+                btn.onclick = async () => { currentStatusFilter = s.id; await initFilters(); await renderList(); };
                 statusContainer.appendChild(btn);
             });
         }
@@ -374,13 +389,13 @@
             try {
                 const records = await loadData();
                 if (records.length === 0) { 
-                    alert('未有吐槽資料可以摘要'); 
+                    alert('未有美食資料可以摘要'); 
                     return; 
                 }
                 const summaryInput = records.slice(0, 30).map(r =>
                     `[${r.category}] ${r.content}`
                 ).join('\n');
-                const prompt = '以下是班級吐槽牆嘅留言。請用繁體中文，用 3-5 句概括同學最關心嘅問題、情緒同有冇明顯 patterns:\n\n' + summaryInput;
+                const prompt = '以下是校園美食嘅留言。請用繁體中文，用 3-5 句概括同學最鍾意嘅美食類型、熱門選擇同有冇明顯 patterns:\n\n' + summaryInput;
                 const result = await askAI(prompt);
                 alert(result);
             } catch (e) {
@@ -431,10 +446,10 @@
                 document.getElementById('sunIcon').classList.remove('hidden');
             }
 
-            initFilters();
+            await initFilters();
             await renderList();
             lucide.createIcons();
         };
     </script>
 </body>
-</html>F
+</html>
